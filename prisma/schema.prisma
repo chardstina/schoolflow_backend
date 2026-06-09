@@ -1,0 +1,493 @@
+// ============================================================
+// SchoolFlow — Multi-Tenant Prisma Schema
+// Every table that holds school data carries schoolId so every
+// query is automatically scoped to the correct tenant.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── TENANTS / SUBSCRIPTION ─────────────────────────────────
+
+model School {
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique          // subdomain: greenfield.schoolflow.ng
+  logoUrl          String?
+  address          String?
+  phone            String?
+  email            String?
+  paystackSubAccount String?                 // school's Paystack sub-account code
+  platformCutPct   Decimal  @default(2.5)   // platform takes 2.5 % of every fee payment
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  subscription     Subscription?
+  users            User[]
+  classes          Class[]
+  subjects         Subject[]
+  students         Student[]
+  feeStructures    FeeStructure[]
+  invoices         Invoice[]
+  payments         Payment[]
+  results          Result[]
+  attendances      Attendance[]
+  payrollEntries   PayrollEntry[]
+  auditLogs        AuditLog[]
+  terms            Term[]
+  sessions         AcademicSession[]
+  paymentProofs    PaymentProof[]
+}
+
+enum SubscriptionTier {
+  STARTER    // ≤ 150 students  ₦15,000/month
+  GROWTH     // ≤ 500 students  ₦25,000/month
+  SCALE      // ≤ 1500 students ₦35,000/month
+  ENTERPRISE // unlimited       ₦40,000/month
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  TRIAL
+}
+
+model Subscription {
+  id                  String             @id @default(cuid())
+  schoolId            String             @unique
+  school              School             @relation(fields: [schoolId], references: [id])
+  tier                SubscriptionTier   @default(STARTER)
+  status              SubscriptionStatus @default(TRIAL)
+  paystackCustomerCode String?
+  paystackAuthCode    String?            // reusable auth for recurring charge
+  currentPeriodStart  DateTime
+  currentPeriodEnd    DateTime
+  trialEndsAt         DateTime?
+  cancelledAt         DateTime?
+  monthlyAmountKobo   Int                // stored in kobo (₦ × 100)
+  studentLimit        Int
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+}
+
+// ─── USERS / AUTH ────────────────────────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  SCHOOL_ADMIN
+  TEACHER
+  ACCOUNTANT
+  PARENT
+}
+
+model User {
+  id           String    @id @default(cuid())
+  schoolId     String?                        // null only for SUPER_ADMIN
+  school       School?   @relation(fields: [schoolId], references: [id])
+  email        String    @unique
+  phone        String?
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         Role
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // role-specific relations
+  teacherProfile TeacherProfile?
+  parentProfile  ParentProfile?
+  auditLogs      AuditLog[]
+
+  @@index([schoolId, role])
+}
+
+model TeacherProfile {
+  id         String    @id @default(cuid())
+  userId     String    @unique
+  user       User      @relation(fields: [userId], references: [id])
+  staffId    String?
+  subjectIds String[]  // cached for quick lookup
+  classIds   String[]
+}
+
+model ParentProfile {
+  id       String    @id @default(cuid())
+  userId   String    @unique
+  user     User      @relation(fields: [userId], references: [id])
+  children Student[]
+}
+
+// ─── ACADEMIC STRUCTURE ──────────────────────────────────────
+
+model AcademicSession {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id])
+  name      String   // e.g. "2024/2025"
+  isCurrent Boolean  @default(false)
+  terms     Term[]
+  createdAt DateTime @default(now())
+
+  @@index([schoolId])
+}
+
+model Term {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id])
+  sessionId String
+  session   AcademicSession @relation(fields: [sessionId], references: [id])
+  name      String   // "First Term" | "Second Term" | "Third Term"
+  startDate DateTime
+  endDate   DateTime
+  isCurrent Boolean  @default(false)
+
+  feeStructures FeeStructure[]
+  invoices      Invoice[]
+  results       Result[]
+  attendances   Attendance[]
+
+  @@index([schoolId, isCurrent])
+}
+
+model Class {
+  id            String    @id @default(cuid())
+  schoolId      String
+  school        School    @relation(fields: [schoolId], references: [id])
+  name          String    // "JSS 1A"
+  level         String    // "JSS1" | "JSS2" … "SS3"
+  capacity      Int       @default(40)
+  headTeacherId String?   // User.id — the HOD / class teacher
+
+  students      Student[]
+  feeStructures FeeStructure[]
+  subjects      ClassSubject[]
+  attendances   Attendance[]
+  results       Result[]
+
+  @@unique([schoolId, name])
+  @@index([schoolId])
+}
+
+model Subject {
+  id       String    @id @default(cuid())
+  schoolId String
+  school   School    @relation(fields: [schoolId], references: [id])
+  name     String
+  code     String
+
+  classSubjects ClassSubject[]
+  results       Result[]
+
+  @@unique([schoolId, code])
+  @@index([schoolId])
+}
+
+model ClassSubject {
+  id        String  @id @default(cuid())
+  classId   String
+  class     Class   @relation(fields: [classId], references: [id])
+  subjectId String
+  subject   Subject @relation(fields: [subjectId], references: [id])
+  teacherId String? // User with TEACHER role
+
+  @@unique([classId, subjectId])
+}
+
+// ─── STUDENTS ─────────────────────────────────────────────────
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+model Student {
+  id           String    @id @default(cuid())
+  schoolId     String
+  school       School    @relation(fields: [schoolId], references: [id])
+  admissionNo  String
+  firstName    String
+  lastName     String
+  middleName   String?
+  dob          DateTime?
+  gender       Gender
+  photoUrl     String?
+  classId      String
+  class        Class     @relation(fields: [classId], references: [id])
+  parentId     String?   // ParentProfile.id
+  parent       ParentProfile? @relation(fields: [parentId], references: [id])
+  isActive     Boolean   @default(true)
+  enrolledAt   DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  invoices    Invoice[]
+  results     Result[]
+  attendances Attendance[]
+
+  @@unique([schoolId, admissionNo])
+  @@index([schoolId, classId])
+}
+
+// ─── ATTENDANCE ───────────────────────────────────────────────
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+model Attendance {
+  id        String           @id @default(cuid())
+  schoolId  String
+  school    School           @relation(fields: [schoolId], references: [id])
+  studentId String
+  student   Student          @relation(fields: [studentId], references: [id])
+  classId   String
+  class     Class            @relation(fields: [classId], references: [id])
+  termId    String
+  term      Term             @relation(fields: [termId], references: [id])
+  date      DateTime         @db.Date
+  status    AttendanceStatus @default(PRESENT)
+  markedBy  String           // User.id (teacher)
+  createdAt DateTime         @default(now())
+
+  @@unique([schoolId, studentId, date])
+  @@index([schoolId, classId, date])
+}
+
+// ─── FEE MANAGEMENT ──────────────────────────────────────────
+
+enum FeeCategory {
+  TUITION
+  UNIFORM
+  BOOKS
+  TRANSPORT
+  EXAM
+  DEVELOPMENT
+  MISCELLANEOUS
+}
+
+model FeeStructure {
+  id          String      @id @default(cuid())
+  schoolId    String
+  school      School      @relation(fields: [schoolId], references: [id])
+  termId      String
+  term        Term        @relation(fields: [termId], references: [id])
+  classId     String?     // null = applies to all classes
+  class       Class?      @relation(fields: [classId], references: [id])
+  category    FeeCategory
+  description String
+  amountKobo  Int         // stored in kobo
+  isCompulsory Boolean    @default(true)
+  createdAt   DateTime    @default(now())
+
+  invoiceItems InvoiceItem[]
+
+  @@index([schoolId, termId, classId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIAL
+  PAID
+  VOID
+  OVERDUE
+}
+
+model Invoice {
+  id           String        @id @default(cuid())
+  schoolId     String
+  school       School        @relation(fields: [schoolId], references: [id])
+  studentId    String
+  student      Student       @relation(fields: [studentId], references: [id])
+  termId       String
+  term         Term          @relation(fields: [termId], references: [id])
+  invoiceNo    String        // SCH-2024-0001
+  totalKobo    Int
+  paidKobo     Int           @default(0)
+  balanceKobo  Int
+  status       InvoiceStatus @default(ISSUED)
+  dueDate      DateTime
+  issuedAt     DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  items         InvoiceItem[]
+  payments      Payment[]
+  paymentProofs PaymentProof[]
+
+  @@unique([schoolId, invoiceNo])
+  @@index([schoolId, studentId, termId])
+}
+
+enum ProofStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model PaymentProof {
+  id           String      @id @default(cuid())
+  schoolId     String
+  school       School      @relation(fields: [schoolId], references: [id])
+  invoiceId    String
+  invoice      Invoice     @relation(fields: [invoiceId], references: [id])
+  uploadedBy   String      // User.id (parent)
+  imageData    String      // base64 data URL of the receipt
+  amountKobo   Int         // amount the parent claims to have paid
+  description  String?     // e.g. "First term tuition via GTBank transfer"
+  status       ProofStatus @default(PENDING)
+  reviewedBy   String?     // User.id (admin)
+  reviewedAt   DateTime?
+  rejectReason String?
+  createdAt    DateTime    @default(now())
+
+  @@index([schoolId, status])
+  @@index([invoiceId])
+}
+
+model InvoiceItem {
+  id             String       @id @default(cuid())
+  invoiceId      String
+  invoice        Invoice      @relation(fields: [invoiceId], references: [id])
+  feeStructureId String
+  feeStructure   FeeStructure @relation(fields: [feeStructureId], references: [id])
+  description    String
+  amountKobo     Int
+
+  @@index([invoiceId])
+}
+
+enum PaymentChannel {
+  PAYSTACK_CARD
+  PAYSTACK_BANK
+  PAYSTACK_USSD
+  CASH
+  BANK_TRANSFER
+}
+
+model Payment {
+  id                  String         @id @default(cuid())
+  schoolId            String
+  school              School         @relation(fields: [schoolId], references: [id])
+  invoiceId           String
+  invoice             Invoice        @relation(fields: [invoiceId], references: [id])
+  amountKobo          Int            // what the parent paid
+  platformCutKobo     Int            @default(0)
+  schoolReceivesKobo  Int            // amount credited to school
+  channel             PaymentChannel
+  paystackReference   String?        @unique
+  paystackStatus      String?        // "success" | "failed"
+  receiptUrl          String?
+  paidAt              DateTime       @default(now())
+  recordedBy          String?        // User.id (for manual cash)
+  createdAt           DateTime       @default(now())
+
+  auditLog AuditLog?
+
+  @@index([schoolId, invoiceId])
+  @@index([paystackReference])
+}
+
+// ─── RESULTS / REPORT CARDS ──────────────────────────────────
+
+enum ResultStatus {
+  DRAFT
+  SUBMITTED      // teacher submitted, awaiting admin approval
+  APPROVED
+  PUBLISHED      // visible to parents
+}
+
+model Result {
+  id             String       @id @default(cuid())
+  schoolId       String
+  school         School       @relation(fields: [schoolId], references: [id])
+  studentId      String
+  student        Student      @relation(fields: [studentId], references: [id])
+  classId        String
+  class          Class        @relation(fields: [classId], references: [id])
+  subjectId      String
+  subject        Subject      @relation(fields: [subjectId], references: [id])
+  termId         String
+  term           Term         @relation(fields: [termId], references: [id])
+
+  // score breakdown
+  caScore1       Decimal?     // continuous assessment 1
+  caScore2       Decimal?
+  examScore      Decimal?
+  totalScore     Decimal?     // computed
+  grade          String?      // A1, B2 … F9
+  remark         String?      // "Excellent"
+  position       Int?         // class position for this subject
+
+  status         ResultStatus @default(DRAFT)
+  submittedAt    DateTime?
+  approvedAt     DateTime?
+  approvedBy     String?      // User.id
+  publishedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([schoolId, studentId, subjectId, termId])
+  @@index([schoolId, classId, termId])
+}
+
+// ─── PAYROLL ─────────────────────────────────────────────────
+
+enum PayrollStatus {
+  PENDING
+  APPROVED
+  PAID
+}
+
+model PayrollEntry {
+  id            String        @id @default(cuid())
+  schoolId      String
+  school        School        @relation(fields: [schoolId], references: [id])
+  staffId       String        // User.id
+  month         Int           // 1–12
+  year          Int
+  basicKobo     Int
+  allowancesKobo Int          @default(0)
+  deductionsKobo Int          @default(0)
+  netKobo       Int
+  status        PayrollStatus @default(PENDING)
+  paidAt        DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([schoolId, staffId, month, year])
+  @@index([schoolId, month, year])
+}
+
+// ─── AUDIT LOG ────────────────────────────────────────────────
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id])
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  action      String   // "PAYMENT_RECORDED" | "INVOICE_VOIDED" | …
+  entityType  String   // "Payment" | "Invoice" | "Result" …
+  entityId    String
+  paymentId   String?  @unique
+  payment     Payment? @relation(fields: [paymentId], references: [id])
+  metadata    Json?    // before/after snapshots
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  @@index([schoolId, entityType, entityId])
+  @@index([schoolId, userId])
+}
