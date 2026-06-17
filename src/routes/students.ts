@@ -103,7 +103,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     });
 
     const betterCount = classmateResults.filter(
-      (r) => (r._avg.totalScore ?? 0) > myAvg
+      (r) => Number(r._avg.totalScore ?? 0) > myAvg
     ).length;
 
     position = betterCount + 1;

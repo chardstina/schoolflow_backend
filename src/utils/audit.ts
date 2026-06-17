@@ -11,5 +11,16 @@ interface AuditParams {
 }
 
 export async function auditLog(params: AuditParams): Promise<void> {
-  await prisma.auditLog.create({ data: params }).catch((e) => console.error('[AuditLog]', e));
+  const { schoolId, userId, action, entityType, entityId, metadata, ipAddress } = params;
+  await prisma.auditLog.create({
+    data: {
+      schoolId,
+      userId,
+      action,
+      entityType,
+      entityId,
+      metadata: metadata as any,
+      ipAddress,
+    },
+  }).catch((e) => console.error('[AuditLog]', e));
 }
