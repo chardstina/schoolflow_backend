@@ -584,3 +584,5 @@ router.get('/payroll', requireRole(Role.SCHOOL_ADMIN, Role.ACCOUNTANT), async (r
   });
   return res.json(entries);
 });
+
+export default router;
