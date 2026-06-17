@@ -26,7 +26,7 @@ import { formatNaira } from '../utils/currency';
 const router = Router();
 router.use(authenticate, resolveTenant, requireActiveSubscription);
 
-// ── Fee Structures ─────────────────────────────────────────────
+// ── Fee Structures ──────────────────────────────────────
 
 const feeStructureSchema = z.object({
   termId: z.string(),
@@ -44,13 +44,17 @@ router.post(
     const parse = feeStructureSchema.safeParse(req.body);
     if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
 
-    const { amountNaira, ...rest } = parse.data;
+    const { amountNaira, termId, classId, category, description, isCompulsory } = parse.data;
 
     const structure = await prisma.feeStructure.create({
       data: {
         schoolId: req.schoolId!,
+        termId,
+        classId,
+        category,
+        description,
+        isCompulsory,
         amountKobo: Math.round(amountNaira * 100),
-        ...rest,
       },
     });
 
@@ -72,7 +76,7 @@ router.get('/structures', async (req: Request, res: Response) => {
   return res.json(structures);
 });
 
-// ── Invoice Generation ────────────────────────────────────────
+// ── Invoice Generation ──────────────────────────────────
 
 router.post(
   '/invoices/generate',
@@ -244,7 +248,7 @@ router.post(
   }
 );
 
-// ── Paystack Payment Flow ────────────────────────────────────
+// ── Paystack Payment Flow ──────────────────────────
 
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY!;
 const PLATFORM_CUT_PCT = parseFloat(process.env.PLATFORM_CUT_PCT ?? '2.5');
@@ -428,7 +432,7 @@ async function processPaystackPayment(txn: any) {
   });
 }
 
-// ── Manual cash payment ───────────────────────────────────────
+// ── Manual cash payment ──────────────────────────
 
 router.post(
   '/pay/cash',
@@ -490,7 +494,7 @@ router.post(
   }
 );
 
-// ── Reminder dispatch ─────────────────────────────────────────
+// ── Reminder dispatch ─────────────────────────
 
 router.post(
   '/reminders/send',
@@ -523,7 +527,9 @@ router.post(
     );
 
     const sent = results.filter((r) => r.status === 'fulfilled').length;
-    return res.json({ total: owing.length, sent });
+    const failed = results.length - sent;
+
+    return res.json({ sent, failed, total: owing.length });
   }
 );
 

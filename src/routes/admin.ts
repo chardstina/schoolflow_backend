@@ -51,9 +51,14 @@ router.get('/dashboard', requireRole(Role.SCHOOL_ADMIN, Role.ACCOUNTANT, Role.SU
     prisma.paymentProof.count({ where: { schoolId, status: 'PENDING' } }),
   ]);
 
-  const termRevenue = termInvoices.reduce((s: number, i: any) => s + i.paidKobo, 0);
-  const termTotal = termInvoices.reduce((s: number, i: any) => s + i.totalKobo, 0);
-  const outstandingFees = termInvoices.reduce((s: number, i: any) => s + i.balanceKobo, 0);
+  let termRevenue = 0;
+  let termTotal = 0;
+  let outstandingFees = 0;
+  for (const inv of termInvoices as any[]) {
+    termRevenue += inv.paidKobo;
+    termTotal += inv.totalKobo;
+    outstandingFees += inv.balanceKobo;
+  }
   const collectionRate = termTotal > 0 ? (termRevenue / termTotal) * 100 : 0;
   const overdueInvoices = termInvoices.filter((i: any) =>
     [InvoiceStatus.ISSUED, InvoiceStatus.PARTIAL, InvoiceStatus.OVERDUE].includes(i.status)
@@ -274,7 +279,7 @@ router.post('/staff', requireRole(Role.SCHOOL_ADMIN), async (req: Request, res: 
   if (!password || password.length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
-  const validRoles = [Role.TEACHER, Role.ACCOUNTANT, Role.SCHOOL_ADMIN];
+  const validRoles: Role[] = [Role.TEACHER, Role.ACCOUNTANT, Role.SCHOOL_ADMIN];
   if (!validRoles.includes(role as Role)) return res.status(400).json({ error: 'Invalid role' });
 
   const passwordHash = await bcrypt.hash(password, 12);
@@ -579,5 +584,3 @@ router.get('/payroll', requireRole(Role.SCHOOL_ADMIN, Role.ACCOUNTANT), async (r
   });
   return res.json(entries);
 });
-
-export default router;
