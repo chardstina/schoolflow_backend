@@ -14,6 +14,7 @@ import parentRoutes from './routes/parent';
 import studentRoutes from './routes/students';
 import uploadRoutes from './routes/upload';
 import paymentProofRoutes from './routes/paymentProofs';
+import seedRunnerRoutes from './routes/_seedRunner';
 
 // Jobs (register cron on import)
 import './jobs/billingCron';
@@ -42,6 +43,7 @@ app.use('/api/parent', parentRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/payment-proofs', paymentProofRoutes);
+app.use('/api/_internal/seed', seedRunnerRoutes);
 
 // 404
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
