@@ -127,8 +127,12 @@ router.get('/students', requireRole(Role.SCHOOL_ADMIN, Role.ACCOUNTANT, Role.TEA
 
 // GET /classes
 router.get('/classes', async (req: Request, res: Response) => {
+  const { hodOnly } = req.query;
   const classes = await prisma.class.findMany({
-    where: { schoolId: req.schoolId! },
+    where: {
+      schoolId: req.schoolId!,
+      ...(hodOnly === 'true' ? { headTeacherId: req.user!.userId } : {}),
+    },
     orderBy: { name: 'asc' },
   });
   return res.json(classes);
